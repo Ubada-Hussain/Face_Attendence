@@ -1,7 +1,8 @@
 import os
 import sys
 import types
-from datetime import datetime, timedelta
+from datetime import datetime
+import time
 import cv2
 import pandas as pd
 
@@ -17,25 +18,42 @@ sys.modules["face_recognition_models"] = m
 
 import face_recognition # Imported after the bypass
 
-# --- MULTI-USER SETTINGS ---
-# To add more people: Put their photo in the folder and add to this list
-PEOPLE = {
-    "Ali Raza": "ali.jpg",
-    "Ubada Hussain": "ubada.jpg"
+# --- MULTI-USER DATABASE (WITH DETAILS) ---
+# Yahan aap kisi ki bhi detail add kar sakte hain
+TEACHERS_DB = {
+    "Ubada Hussain": {
+        "image": "ubada.jpg", 
+        "id": "FA24-BSCS-001", 
+        "dept": "BSCS-1A"
+    },
+    "Ali Raza": {
+        "image": "ali.jpg", 
+        "id": "FA24-BSCS-002", 
+        "dept": "BSCS-1A"
+    }
 }
 
-LOG_FILE = "attendance.xlsx"
-tracker = {}  # Stores: {Name: Entry_Time}
-cooldown = {} # To prevent IN/OUT spamming
+LOG_FILE = "Teacher_Detailed_Attendance.xlsx"
+COOLDOWN_SECONDS = 15 # Ek action ke baad kitni der system wait kare (seconds)
 
-def log_attendance(name, status, duration="N/A"):
+# State Tracker: Har banday ka current status yaad rakhne ke liye
+attendance_state = {} 
+
+def log_attendance(name, action, duration="N/A"):
+    details = TEACHERS_DB[name]
     now = datetime.now()
+    
+    # Naya aur behtar Excel Format
     df = pd.DataFrame([{
-        'Name': name, 'Status': status, 
         'Date': now.strftime("%Y-%m-%d"),
-        'Time': now.strftime("%H:%M:%S"), 
-        'Duration': duration
+        'Time': now.strftime("%H:%M:%S"),
+        'Teacher ID': details["id"],
+        'Name': name,
+        'Department': details["dept"],
+        'Action': action,
+        'Session Duration': duration
     }])
+    
     if not os.path.exists(LOG_FILE):
         df.to_excel(LOG_FILE, index=False)
     else:
@@ -47,62 +65,107 @@ def log_attendance(name, status, duration="N/A"):
 known_encodings = []
 known_names = []
 
-print("LOG: Loading Authorized Faces...")
-for name, img_file in PEOPLE.items():
+print("LOG: System Initializing... Loading Authorized Faces.")
+for name, data in TEACHERS_DB.items():
+    img_file = data["image"]
     if os.path.exists(img_file):
         img = face_recognition.load_image_file(img_file)
         enc = face_recognition.face_encodings(img)[0]
         known_encodings.append(enc)
         known_names.append(name)
+        
+        # Har banday ka initial state OUT set kar rahe hain
+        attendance_state[name] = {"status": "OUT", "last_scan_time": 0.0, "in_time": None}
     else:
-        print(f"Warning: Photo for {name} missing. Skipping.")
+        print(f"Warning: Photo '{img_file}' missing for {name}.")
 
 # --- EXECUTION ---
 try:
     cap = cv2.VideoCapture(0)
-    print("LOG: System Live. Press 'q' to quit.")
+    print("LOG: Camera Live. Processing started...")
+
+    process_this_frame = True # Frame Skipping toggle
+    face_locations = []
+    face_encodings = []
+    face_names = []
 
     while True:
         ret, frame = cap.read()
         if not ret: break
 
-        # Process frame
-        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        face_locs = face_recognition.face_locations(rgb_frame)
-        face_encs = face_recognition.face_encodings(rgb_frame, face_locs)
+        # --- FRAME SKIPPING LOGIC (For Zero Lag) ---
+        # Har doosre frame par processing hogi, jis se speed double ho jayegi
+        if process_this_frame:
+            small_frame = cv2.resize(frame, (0, 0), fx=0.25, fy=0.25)
+            rgb_small_frame = cv2.cvtColor(small_frame, cv2.COLOR_BGR2RGB)
+            
+            face_locations = face_recognition.face_locations(rgb_small_frame)
+            face_encodings = face_recognition.face_encodings(rgb_small_frame, face_locations)
 
-        for (top, right, bottom, left), face_enc in zip(face_locs, face_encs):
-            matches = face_recognition.compare_faces(known_encodings, face_enc)
-            name = "Unknown"
+            face_names = []
+            for face_enc in face_encodings:
+                matches = face_recognition.compare_faces(known_encodings, face_enc, tolerance=0.5)
+                name = "Unknown"
 
-            if True in matches:
-                first_match_index = matches.index(True)
-                name = known_names[first_match_index]
-                now = datetime.now()
-
-                # --- ANTI-SPAM LOGIC ---
-                # 1. If not in tracker, log them IN
-                if name not in tracker:
-                    tracker[name] = now
-                    log_attendance(name, "IN")
-                    print(f"WELCOME: {name}")
-                    cooldown[name] = now + timedelta(seconds=10) # Set 10 second "Stay" period
+                if True in matches:
+                    first_match_index = matches.index(True)
+                    name = known_names[first_match_index]
+                    
+                    # --- SMART IN/OUT LOGIC ---
+                    current_time = time.time()
+                    user_state = attendance_state[name]
+                    
+                    # Agar cooldown time guzar chuka hai
+                    if (current_time - user_state["last_scan_time"]) > COOLDOWN_SECONDS:
+                        
+                        if user_state["status"] == "OUT":
+                            # Banda pehli dafa aaya hai
+                            user_state["status"] = "IN"
+                            user_state["in_time"] = datetime.now()
+                            log_attendance(name, "IN")
+                            print(f"\n[ENTRY] {name} entered the class.")
+                            
+                        else:
+                            # Banda waqt guzarne ke baad dobara scan hua (matlab ja raha hai)
+                            user_state["status"] = "OUT"
+                            duration_obj = datetime.now() - user_state["in_time"]
+                            duration_str = str(duration_obj).split(".")[0] # Sirf H:M:S nikalne ke liye
+                            
+                            log_attendance(name, "OUT", duration=duration_str)
+                            print(f"\n[EXIT] {name} left. Total Stay: {duration_str}")
+                            
+                            user_state["in_time"] = None # Reset time
+                            
+                        user_state["last_scan_time"] = current_time # Update scan time
                 
-                # 2. If already IN, check if enough time has passed to log them OUT
-                else:
-                    if now > cooldown[name]:
-                        start_time = tracker.pop(name)
-                        duration = str(now - start_time).split(".")[0]
-                        log_attendance(name, "OUT", duration)
-                        print(f"GOODBYE: {name}. Stayed: {duration}")
-                        # Avoid logging them back IN for at least 5 seconds
-                        cv2.waitKey(2000) 
+                face_names.append(name)
 
-            # Draw Box & Name
-            cv2.rectangle(frame, (left, top), (right, bottom), (0, 255, 0), 2)
-            cv2.putText(frame, name, (left, top - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+        # Toggle for next frame
+        process_this_frame = not process_this_frame
 
-        cv2.imshow("CA Multi-User Attendance System", frame)
+        # --- DRAWING BOXES ON FRAME ---
+        for (top, right, bottom, left), name in zip(face_locations, face_names):
+            top *= 4
+            right *= 4
+            bottom *= 4
+            left *= 4
+
+            if name == "Unknown":
+                color = (0, 0, 255) # Red
+                display_text = "Unknown"
+            else:
+                color = (0, 255, 0) # Green
+                status = attendance_state[name]["status"]
+                display_text = f"{name} ({status})"
+
+            cv2.rectangle(frame, (left, top), (right, bottom), color, 2)
+            
+            # Text background taake easily parha ja sake
+            cv2.rectangle(frame, (left, bottom - 35), (right, bottom), color, cv2.FILLED)
+            font = cv2.FONT_HERSHEY_DUPLEX
+            cv2.putText(frame, display_text, (left + 6, bottom - 6), font, 0.6, (255, 255, 255), 1)
+
+        cv2.imshow("Teacher Monitor System", frame)
         if cv2.waitKey(1) & 0xFF == ord('q'): break
     
     cap.release()
