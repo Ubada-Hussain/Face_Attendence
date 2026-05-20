@@ -18,8 +18,6 @@ sys.modules["face_recognition_models"] = m
 
 import face_recognition # Imported after the bypass
 
-# --- MULTI-USER DATABASE (WITH DETAILS) ---
-# Yahan aap kisi ki bhi detail add kar sakte hain
 TEACHERS_DB = {
     "Ubada Hussain": {
         "image": "ubada.jpg", 
@@ -158,12 +156,12 @@ try:
                 status = attendance_state[name]["status"]
                 display_text = f"{name} ({status})"
 
+            # Sirf simple border wala slim box draw karein (2 thickness ke sath)
             cv2.rectangle(frame, (left, top), (right, bottom), color, 2)
             
-            # Text background taake easily parha ja sake
-            cv2.rectangle(frame, (left, bottom - 35), (right, bottom), color, cv2.FILLED)
+            # Text ko upper left corner (top line se thora upar) set karein, bina kisi solid background ke
             font = cv2.FONT_HERSHEY_DUPLEX
-            cv2.putText(frame, display_text, (left + 6, bottom - 6), font, 0.6, (255, 255, 255), 1)
+            cv2.putText(frame, display_text, (left, top - 10), font, 0.6, color, 1)
 
         cv2.imshow("Teacher Monitor System", frame)
         if cv2.waitKey(1) & 0xFF == ord('q'): break
