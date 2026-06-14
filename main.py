@@ -5,8 +5,8 @@ from datetime import datetime
 import time
 import cv2
 import pandas as pd
+import serial
 
-# --- THE BYPASS (DO NOT CHANGE) ---
 MODEL_DIR = r"C:/Users/dell/AppData/Roaming/Python/Python314/site-packages/face_recognition/models"
 os.environ['FACE_RECOGNITION_MODELS_PATH'] = MODEL_DIR
 m = types.ModuleType("face_recognition_models")
@@ -16,32 +16,43 @@ m.face_recognition_model_location = lambda: os.path.join(MODEL_DIR, "dlib_face_r
 m.cnn_face_detector_model_location = lambda: os.path.join(MODEL_DIR, "mmod_human_face_detector.dat")
 sys.modules["face_recognition_models"] = m
 
-import face_recognition # Imported after the bypass
+import face_recognition
+
+try:
+    arduino = serial.Serial('COM4', 9600, timeout=1)
+    time.sleep(2)
+except Exception:
+    arduino = None
 
 TEACHERS_DB = {
     "Ubada Hussain": {
         "image": "ubada.jpg", 
         "id": "FA24-BSCS-001", 
-        "dept": "BSCS-1A"
+        "dept": "BSCS-1A",
+        "uid": "6D 3C 18 07"
     },
     "Ali Raza": {
         "image": "ali.jpg", 
         "id": "FA24-BSCS-002", 
-        "dept": "BSCS-1A"
+        "dept": "BSCS-1A",
+        "uid": "PUT_ALI_UID_HERE"
+    },
+    "Ustad Gggg": {
+        "image": "soban.jpg", 
+        "id": "FA24-BSCS-003", 
+        "dept": "BSCS-1A",
+        "uid": "PUT_SOBAN_UID_HERE"
     }
 }
 
 LOG_FILE = "Teacher_Detailed_Attendance.xlsx"
-COOLDOWN_SECONDS = 15 # Ek action ke baad kitni der system wait kare (seconds)
 
-# State Tracker: Har banday ka current status yaad rakhne ke liye
 attendance_state = {} 
 
 def log_attendance(name, action, duration="N/A"):
     details = TEACHERS_DB[name]
     now = datetime.now()
     
-    # Naya aur behtar Excel Format
     df = pd.DataFrame([{
         'Date': now.strftime("%Y-%m-%d"),
         'Time': now.strftime("%H:%M:%S"),
@@ -59,11 +70,9 @@ def log_attendance(name, action, duration="N/A"):
             old = pd.read_excel(LOG_FILE)
             pd.concat([old, df], ignore_index=True).to_excel(writer, index=False)
 
-# --- INITIALIZE MULTI-FACE ENCODINGS ---
 known_encodings = []
 known_names = []
 
-print("LOG: System Initializing... Loading Authorized Faces.")
 for name, data in TEACHERS_DB.items():
     img_file = data["image"]
     if os.path.exists(img_file):
@@ -72,17 +81,12 @@ for name, data in TEACHERS_DB.items():
         known_encodings.append(enc)
         known_names.append(name)
         
-        # Har banday ka initial state OUT set kar rahe hain
-        attendance_state[name] = {"status": "OUT", "last_scan_time": 0.0, "in_time": None}
-    else:
-        print(f"Warning: Photo '{img_file}' missing for {name}.")
+        attendance_state[name] = {"status": "OUT", "in_time": None}
 
-# --- EXECUTION ---
 try:
     cap = cv2.VideoCapture(0)
-    print("LOG: Camera Live. Processing started...")
 
-    process_this_frame = True # Frame Skipping toggle
+    process_this_frame = True
     face_locations = []
     face_encodings = []
     face_names = []
@@ -91,8 +95,38 @@ try:
         ret, frame = cap.read()
         if not ret: break
 
-        # --- FRAME SKIPPING LOGIC (For Zero Lag) ---
-        # Har doosre frame par processing hogi, jis se speed double ho jayegi
+        if arduino and arduino.in_waiting > 0:
+            try:
+                msg = arduino.readline().decode('utf-8').strip()
+                if msg.startswith("UID:"):
+                    scanned_uid = msg.split(":")[1].strip()
+                    user_found = False
+                    
+                    for db_name, db_data in TEACHERS_DB.items():
+                        if db_data.get("uid") == scanned_uid:
+                            user_found = True
+                            user_state = attendance_state[db_name]
+                            
+                            if user_state["status"] == "IN":
+                                user_state["status"] = "OUT"
+                                if user_state["in_time"]:
+                                    duration_obj = datetime.now() - user_state["in_time"]
+                                    duration_str = str(duration_obj).split(".")[0]
+                                else:
+                                    duration_str = "N/A"
+                                    
+                                log_attendance(db_name, "OUT", duration=duration_str)
+                                print(f"\n[EXIT] {db_name} left via RFID. Stay: {duration_str}")
+                                user_state["in_time"] = None
+                            else:
+                                print(f"\n[INFO] {db_name} scanned RFID, but was not marked IN.")
+                            break
+                            
+                    if not user_found:
+                        print(f"\n[UNREGISTERED RFID SCAN] UID: {scanned_uid}")
+            except Exception:
+                pass
+
         if process_this_frame:
             small_frame = cv2.resize(frame, (0, 0), fx=0.25, fy=0.25)
             rgb_small_frame = cv2.cvtColor(small_frame, cv2.COLOR_BGR2RGB)
@@ -109,39 +143,21 @@ try:
                     first_match_index = matches.index(True)
                     name = known_names[first_match_index]
                     
-                    # --- SMART IN/OUT LOGIC ---
-                    current_time = time.time()
                     user_state = attendance_state[name]
                     
-                    # Agar cooldown time guzar chuka hai
-                    if (current_time - user_state["last_scan_time"]) > COOLDOWN_SECONDS:
+                    if user_state["status"] == "OUT":
+                        user_state["status"] = "IN"
+                        user_state["in_time"] = datetime.now()
+                        log_attendance(name, "IN")
+                        print(f"\n[ENTRY] {name} entered via Camera.")
                         
-                        if user_state["status"] == "OUT":
-                            # Banda pehli dafa aaya hai
-                            user_state["status"] = "IN"
-                            user_state["in_time"] = datetime.now()
-                            log_attendance(name, "IN")
-                            print(f"\n[ENTRY] {name} entered the class.")
-                            
-                        else:
-                            # Banda waqt guzarne ke baad dobara scan hua (matlab ja raha hai)
-                            user_state["status"] = "OUT"
-                            duration_obj = datetime.now() - user_state["in_time"]
-                            duration_str = str(duration_obj).split(".")[0] # Sirf H:M:S nikalne ke liye
-                            
-                            log_attendance(name, "OUT", duration=duration_str)
-                            print(f"\n[EXIT] {name} left. Total Stay: {duration_str}")
-                            
-                            user_state["in_time"] = None # Reset time
-                            
-                        user_state["last_scan_time"] = current_time # Update scan time
+                        if arduino:
+                            arduino.write(b'OPEN\n')
                 
                 face_names.append(name)
 
-        # Toggle for next frame
         process_this_frame = not process_this_frame
 
-        # --- DRAWING BOXES ON FRAME ---
         for (top, right, bottom, left), name in zip(face_locations, face_names):
             top *= 4
             right *= 4
@@ -149,17 +165,15 @@ try:
             left *= 4
 
             if name == "Unknown":
-                color = (0, 0, 255) # Red
+                color = (0, 0, 255)
                 display_text = "Unknown"
             else:
-                color = (0, 255, 0) # Green
+                color = (0, 255, 0)
                 status = attendance_state[name]["status"]
                 display_text = f"{name} ({status})"
 
-            # Sirf simple border wala slim box draw karein (2 thickness ke sath)
             cv2.rectangle(frame, (left, top), (right, bottom), color, 2)
             
-            # Text ko upper left corner (top line se thora upar) set karein, bina kisi solid background ke
             font = cv2.FONT_HERSHEY_DUPLEX
             cv2.putText(frame, display_text, (left, top - 10), font, 0.6, color, 1)
 
@@ -168,6 +182,9 @@ try:
     
     cap.release()
     cv2.destroyAllWindows()
+    
+    if arduino:
+        arduino.close()
 
 except Exception as e:
-    print(f"System Error: {e}")
+    print(e)
