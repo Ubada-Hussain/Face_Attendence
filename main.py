@@ -82,11 +82,13 @@ for name, data in TEACHERS_DB.items():
         known_names.append(name)
         
         attendance_state[name] = {"status": "OUT", "in_time": None}
-
 try:
     cap = cv2.VideoCapture(0)
 
-    process_this_frame = True
+    # --- NAYI LOGIC YAHAN HAI ---
+    frame_count = 0
+    PROCESS_EVERY_N_FRAMES = 5  # Har 5 frames ke baad scan karega (Speed badhane ke liye isay 7 ya 10 bhi kar sakte ho)
+
     face_locations = []
     face_encodings = []
     face_names = []
@@ -95,6 +97,7 @@ try:
         ret, frame = cap.read()
         if not ret: break
 
+        # Arduino se RFID sunne wala code waisa hi rahega
         if arduino and arduino.in_waiting > 0:
             try:
                 msg = arduino.readline().decode('utf-8').strip()
@@ -127,7 +130,8 @@ try:
             except Exception:
                 pass
 
-        if process_this_frame:
+        # --- SMART FRAME SKIPPING ---
+        if frame_count % PROCESS_EVERY_N_FRAMES == 0:
             small_frame = cv2.resize(frame, (0, 0), fx=0.25, fy=0.25)
             rgb_small_frame = cv2.cvtColor(small_frame, cv2.COLOR_BGR2RGB)
             
@@ -156,8 +160,10 @@ try:
                 
                 face_names.append(name)
 
-        process_this_frame = not process_this_frame
+        # Counter ko agay barhao
+        frame_count += 1
 
+        # Boxes draw karne wala hissa
         for (top, right, bottom, left), name in zip(face_locations, face_names):
             top *= 4
             right *= 4
