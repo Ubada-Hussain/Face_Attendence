@@ -3,6 +3,9 @@ import sys
 import types
 from datetime import datetime
 import time
+import json
+import urllib.error
+import urllib.request
 import cv2
 import pandas as pd
 import serial
@@ -28,26 +31,50 @@ TEACHERS_DB = {
     "Ubada Hussain": {
         "image": "ubada.jpg", 
         "id": "FA24-BSCS-001", 
-        "dept": "BSCS-1A",
+        "dept": "BSCS-4A",
         "uid": "6D 3C 18 07"
     },
     "Ali Raza": {
         "image": "ali.jpg", 
         "id": "FA24-BSCS-002", 
-        "dept": "BSCS-1A",
-        "uid": "PUT_ALI_UID_HERE"
+        "dept": "BSCS-4A",
+        "uid": "79 D0 0F 9E"
     },
     "Ustad Gggg": {
         "image": "soban.jpg", 
         "id": "FA24-BSCS-003", 
         "dept": "BSCS-1A",
-        "uid": "PUT_SOBAN_UID_HERE"
+        "uid": "61 5E 0F 9E "
     }
 }
 
 LOG_FILE = "Teacher_Detailed_Attendance.xlsx"
+API_BASE_URL = os.environ.get("CA_API_URL", "http://127.0.0.1:5050")
 
 attendance_state = {} 
+
+def normalize_uid(uid):
+    return " ".join(uid.strip().upper().split())
+
+def send_access_event(path, payload):
+    try:
+        data = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(
+            f"{API_BASE_URL}{path}",
+            data=data,
+            headers={"Content-Type": "application/json"},
+            method="POST"
+        )
+        with urllib.request.urlopen(req, timeout=2) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        try:
+            return json.loads(e.read().decode("utf-8"))
+        except Exception:
+            return {"allowed": False, "message": str(e)}
+    except Exception as e:
+        print(f"\n[WEB API OFFLINE] {e}")
+        return {"allowed": True, "openGate": True, "message": "API offline fallback"}
 
 def log_attendance(name, action, duration="N/A"):
     details = TEACHERS_DB[name]
@@ -102,15 +129,23 @@ try:
             try:
                 msg = arduino.readline().decode('utf-8').strip()
                 if msg.startswith("UID:"):
-                    scanned_uid = msg.split(":")[1].strip()
+                    scanned_uid = normalize_uid(msg.split(":")[1])
                     user_found = False
                     
                     for db_name, db_data in TEACHERS_DB.items():
-                        if db_data.get("uid") == scanned_uid:
+                        if normalize_uid(db_data.get("uid", "")) == scanned_uid:
                             user_found = True
                             user_state = attendance_state[db_name]
-                            
-                            if user_state["status"] == "IN":
+
+                            api_result = send_access_event("/api/access/exit", {
+                                "name": db_name,
+                                "teacherId": db_data["id"],
+                                "dept": db_data["dept"],
+                                "uid": normalize_uid(db_data["uid"]),
+                                "source": "RFID"
+                            })
+
+                            if api_result.get("message") == "Exit marked":
                                 user_state["status"] = "OUT"
                                 if user_state["in_time"]:
                                     duration_obj = datetime.now() - user_state["in_time"]
@@ -119,10 +154,13 @@ try:
                                     duration_str = "N/A"
                                     
                                 log_attendance(db_name, "OUT", duration=duration_str)
-                                print(f"\n[EXIT] {db_name} left via RFID. Stay: {duration_str}")
+                                print(f"\n[EXIT] {db_name} left via RFID. Stay: {duration_str}. Web: {api_result.get('message')}")
                                 user_state["in_time"] = None
+
+                                if arduino and api_result.get("openGate"):
+                                    arduino.write(b'OPEN\n')
                             else:
-                                print(f"\n[INFO] {db_name} scanned RFID, but was not marked IN.")
+                                print(f"\n[INFO] {db_name} RFID scanned. Web: {api_result.get('message')}")
                             break
                             
                     if not user_found:
@@ -150,12 +188,25 @@ try:
                     user_state = attendance_state[name]
                     
                     if user_state["status"] == "OUT":
-                        user_state["status"] = "IN"
-                        user_state["in_time"] = datetime.now()
-                        log_attendance(name, "IN")
-                        print(f"\n[ENTRY] {name} entered via Camera.")
-                        
-                        if arduino:
+                        details = TEACHERS_DB[name]
+                        api_result = send_access_event("/api/access/entry", {
+                            "name": name,
+                            "teacherId": details["id"],
+                            "dept": details["dept"],
+                            "uid": normalize_uid(details["uid"]),
+                            "source": "CAMERA"
+                        })
+
+                        if api_result.get("allowed"):
+                            user_state["status"] = "IN"
+                            user_state["in_time"] = datetime.now()
+                            log_attendance(name, "IN")
+                            print(f"\n[ENTRY] {name} entered via Camera. Web: {api_result.get('message')}")
+
+                        else:
+                            print(f"\n[BLOCKED] {name}: {api_result.get('message')}")
+
+                        if arduino and api_result.get("openGate"):
                             arduino.write(b'OPEN\n')
                 
                 face_names.append(name)
