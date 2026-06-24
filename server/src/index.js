@@ -20,7 +20,7 @@ const io = new Server(server, {
 
 const PORT = Number(process.env.PORT || 5050);
 const MONGO_URI = process.env.MONGO_URI || 'mongodb://127.0.0.1:27017/ca_attendance_parking';
-const TOTAL_PARKING_SLOTS = Number(process.env.TOTAL_PARKING_SLOTS || 3);
+const TOTAL_PARKING_SLOTS = Number(process.env.TOTAL_PARKING_SLOTS || 5);
 const MIN_WEEKLY_HOURS = Number(process.env.MIN_WEEKLY_HOURS || 20);
 
 app.use(cors({ origin: allowedOrigins }));
@@ -89,7 +89,8 @@ const Notification = mongoose.model('Notification', notificationSchema);
 const seedTeachers = [
   { name: 'Ubada Hussain', teacherId: 'FA24-BSCS-001', dept: 'BSCS-1A', uid: '6D 3C 18 07', image: 'ubada.jpg' },
   { name: 'Ali Raza', teacherId: 'FA24-BSCS-002', dept: 'BSCS-1A', uid: '79 D0 0F 9E', image: 'ali.jpg' },
-  { name: 'Ustad Gggg', teacherId: 'FA24-BSCS-003', dept: 'BSCS-1A', uid: '61 5E 0F 9E', image: 'soban.jpg' }
+  { name: 'Ustad Gggg', teacherId: 'FA24-BSCS-003', dept: 'BSCS-1A', uid: '61 5E 0F 9E', image: 'soban.jpg' },
+  { name: 'Salman', teacherId: 'FA24-BSCS-004', dept: 'BSCS-1A', uid: 'AB CD 12 34', image: 'salman.jpg' }
 ];
 
 async function seedDatabase() {

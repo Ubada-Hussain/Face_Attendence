@@ -43,8 +43,14 @@ TEACHERS_DB = {
     "Ustad Gggg": {
         "image": "soban.jpg", 
         "id": "FA24-BSCS-003", 
-        "dept": "BSCS-1A",
-        "uid": "61 5E 0F 9E "
+        "dept": "BSCS-4A",
+        "uid": "61 5E 0F 9E"
+    },
+    "Salman": {
+        "image": "salman.jpg", 
+        "id": "FA24-BSCS-004", 
+        "dept": "BSCS-4A",
+        "uid": "AB CD 12 34"
     }
 }
 
